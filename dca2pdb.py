@@ -5,8 +5,9 @@ from Bio import pairwise2
 from Bio import AlignIO
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 import os
-import pyhmmer
+import pickle
 import subprocess
 
 #aa list and dictionaries
@@ -19,8 +20,18 @@ d_3to1 = {a3:a1 for a3,a1 in zip(aa_3,valid_aa)}
 ####################################################################################################
 #### FUNCTIONS ####
 
+#save and load any object with pickle
+def save_obj(obj, name ):
+    with open(name, 'wb') as f:
+        pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+
+def load_obj(name ):
+    with open( name, 'rb') as f:
+        return pickle.load(f)
+
+
 #### DCA ANALYSIS ####
-def run_dca(path_msa, path_julia = "/home/giancarlo/Documents/programs/julia-1.3.1/bin/julia"):
+def run_dca(path_msa, theta = 0.2, path_julia = "/home/giancarlo/Documents/programs/julia-1.3.1/bin/julia"):
     '''run plmDCA, python wrapper to plmDCA_julia (Pagnani version )'''
     #julia.install(path_julia)
     from julia import Julia
@@ -28,7 +39,7 @@ def run_dca(path_msa, path_julia = "/home/giancarlo/Documents/programs/julia-1.3
     #compiled_modules == True doesn't work.. It recompiles the module each time (slow)
     jl = Julia(runtime=path_julia, compiled_modules=False)
     from julia import PlmDCA
-    dca_res = PlmDCA.plmdca(path_msa)
+    dca_res = PlmDCA.plmdca(path_msa, theta = 0.2)
     J = dca_res.Jtensor
     h = dca_res.htensor
     fn_dca = dca_res.score
@@ -48,24 +59,25 @@ def match_dca_pdb(d_dist, fn_dca, df):
     all_idx_msa1, all_idx_msa2= [], []
     all_dist = []
     all_dca = []
-    for keys, item in d_dist.items():
+    for keys, item in tqdm(d_dist.items()):
         idx_pdb1, idx_pdb2 = keys
-        aa1= df.loc[df['idx_pdb'] == idx_pdb1, 'aa_pdb_msa'].values[0]
-        aa2= df.loc[df['idx_pdb'] == idx_pdb2, 'aa_pdb_msa'].values[0]
-        idx_msa1 = df.loc[df['idx_pdb'] == idx_pdb1, 'idx_msa'].values[0]
-        idx_msa2 = df.loc[df['idx_pdb'] == idx_pdb2, 'idx_msa'].values[0]
-        dist = item
-        if (idx_msa1, idx_msa2) in list(d_fn_dca.keys()):
-            dca_score = d_fn_dca[(idx_msa1,idx_msa2)]
-            all_aa1.append(aa1)
-            all_aa2.append(aa2)
-            all_idx_pdb1.append(idx_pdb1)
-            all_idx_pdb2.append(idx_pdb2)
-            all_idx_msa1.append(idx_msa1)
-            all_idx_msa2.append(idx_msa2)
-            all_dist.append(dist)
-            all_dca.append(dca_score)
-            #print(aa1, aa2, idx_pdb1, idx_pdb2, dist, idx_msa1, idx_msa2, dca_score)
+        if len(df.loc[df['idx_pdb'] == idx_pdb1])>0 and len(df.loc[df['idx_pdb'] == idx_pdb2])>0:
+            aa1= df.loc[df['idx_pdb'] == idx_pdb1, 'aa_pdb_msa'].values[0]
+            aa2= df.loc[df['idx_pdb'] == idx_pdb2, 'aa_pdb_msa'].values[0]
+            idx_msa1 = df.loc[df['idx_pdb'] == idx_pdb1, 'idx_msa'].values[0]
+            idx_msa2 = df.loc[df['idx_pdb'] == idx_pdb2, 'idx_msa'].values[0]
+            dist = item
+            if (idx_msa1, idx_msa2) in list(d_fn_dca.keys()):
+                dca_score = d_fn_dca[(idx_msa1,idx_msa2)]
+                all_aa1.append(aa1)
+                all_aa2.append(aa2)
+                all_idx_pdb1.append(idx_pdb1)
+                all_idx_pdb2.append(idx_pdb2)
+                all_idx_msa1.append(idx_msa1)
+                all_idx_msa2.append(idx_msa2)
+                all_dist.append(dist)
+                all_dca.append(dca_score)
+                #print(aa1, aa2, idx_pdb1, idx_pdb2, dist, idx_msa1, idx_msa2, dca_score)
     df_results_dca = pd.DataFrame({'aa1':all_aa1, 'aa2':all_aa2, 'idx_pdb1':all_idx_pdb1, 'idx_pdb2':all_idx_pdb2, 'idx_msa1':all_idx_msa1, 'idx_msa2':all_idx_msa2, 'dist_pdb':all_dist, 'fn_dca':all_dca})
     return df_results_dca
 
@@ -180,11 +192,13 @@ def compute_entropy_from_freq(fi, remove_gaps = True, base2 = True):
     return S
 
 #### MSA ANALYSIS ####
-def get_seq_from_msa(path_msa, remove_dot_lower= True):
+def get_seq_from_msa(path_msa, format_msa = 'fasta',remove_dot_lower= True):
     ''' read seq in msa, return dictionary id_prot -> seq_prot
-    if remove_dot_lower==True: remove dots and lower cases '''
+    if remove_dot_lower==True: remove dots and lower cases
+    multiple formats are supported (e.g. fasta and stockholm)
+    BUG with stockholm: SeqIO interprets . as - '''
     d_id_seq = {}
-    record_msa = list(SeqIO.parse(open(path_msa,'r'), "fasta"))
+    record_msa = list(SeqIO.parse(open(path_msa,'r'), format_msa))
     for idx_rec, rec in enumerate(record_msa):
         name = rec.id
         seq = rec.seq
@@ -194,16 +208,23 @@ def get_seq_from_msa(path_msa, remove_dot_lower= True):
         d_id_seq[name] = str(seq)
     return d_id_seq
 
-def trim_gapped_col(d_id_seq, max_gap_fraction = 0.5):
-    ''' rm positions (aa) with more than max_gap_fraction gaps
-    return trimmed d_id_seq'''
+def get_gapped_col(d_id_seq, max_gap_fraction = 0.5):
     fi = compute_freq(d_id_seq)
+    all_gap_fraction = []
     gap_idx = []
     for idx in range(0, fi.shape[1]):
         gap_fraction = fi[-1][idx]
+        all_gap_fraction.append(gap_fraction)
         if gap_fraction > max_gap_fraction:
             gap_idx.append(idx)
-    print('max_gap_fraction={0}, removing {1} columns: {2}'.format(max_gap_fraction, len(gap_idx), gap_idx))
+    print('max_gap_fraction={0}, remove {1} columns: {2}'.format(max_gap_fraction, len(gap_idx), gap_idx))
+    return all_gap_fraction, gap_idx
+
+
+def trim_gapped_col(d_id_seq, max_gap_fraction = 0.5):
+    ''' rm positions (aa) with more than max_gap_fraction gaps
+    return trimmed d_id_seq'''
+    _, gap_idx = get_gapped_col(d_id_seq, max_gap_fraction)
     new_d_id_seq = {}
     for seq_id, seq in d_id_seq.items():
         new_seq = [j for i, j in enumerate(seq) if i not in gap_idx]
@@ -223,6 +244,73 @@ def trim_gapped_seq(d_id_seq, max_gap_fraction_seq = 0.5):
         new_d_id_seq[seq_id] = seq
     print('max_gap_fraction_seq={0}, removing {1} sequences'.format(max_gap_fraction_seq, num_trimmed_seq))
     return new_d_id_seq
+
+def get_taxonomy_msa(d_id_seq, df_speclist):
+    ''' for each seq in the msa, get the species, taxonomy number and kingdom '''
+    all_species = []
+    all_tax_number = []
+    all_kingdom= []
+    for key in list(d_id_seq.keys()):
+        species = key.split("_")[-1].split("/")[0]
+        tax_number = df_speclist.loc[df_speclist['species'] == species, 'tax_code'].values[0]
+        kingdom = df_speclist.loc[df_speclist['species'] == species, 'kingdom'].values[0]
+        all_species.append(species)
+        all_tax_number.append(int(tax_number))
+        all_kingdom.append(kingdom)
+    return all_species, all_tax_number, all_kingdom
+
+def read_speclist(path_speclist = './dib_plos/speclist.txt'):
+    ''' read speclist file (from Uniprot)
+    return df: species, kingdom '''
+    all_species = []
+    all_tax_code = []
+    all_kingdom = []
+    with open(path_speclist,'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            #keep only N= line
+            if len(line.split())>3:
+                if line.split()[3][:2] == "N=":
+                    #print(line.split())
+                    name = line.split()[0]
+                    kingdom = line.split()[1]
+                    tax_code= line.split()[2][:-1]
+                    all_species.append(name)
+                    all_kingdom.append(kingdom)
+                    all_tax_code.append(tax_code)
+        df = pd.DataFrame({'species':all_species, 'tax_code': all_tax_code, 'kingdom':all_kingdom})
+        return df
+
+def trim_msa_taxonomy(d_id_seq, tax_min = None, kingdom = None):
+    '''
+    a) select only species with taxonomy higher than tax_min
+    b) select only belonging to kingdom
+    '''
+    df_speclist = read_speclist()
+    s, t, k = get_taxonomy_msa(d_id_seq, df_speclist)
+    if tax_min != None:
+        #select only species with taxonomy higher than tax_min
+        tax_idx = [i for i in range(0,len(t)) if (t[i] > tax_min) ]
+        print("keep only seq with taxonomy < {0}".format(tax_min))
+        #new d_id_seq
+        new_d_id_seq = {}
+        for idx in tax_idx:
+            key = list(d_id_seq.keys())[idx]
+            new_seq = d_id_seq[key]
+            new_d_id_seq[key] = new_seq
+        return new_d_id_seq
+    if kingdom != None:
+        #idx ok
+        king_idx = [i for i in range(0,len(k)) if (k[i] == kingdom) ]
+        print("keep only {0}".format(kingdom))
+        #new d_id_seq
+        new_d_id_seq = {}
+        for idx in king_idx:
+            key = list(d_id_seq.keys())[idx]
+            new_seq = d_id_seq[key]
+            new_d_id_seq[key] = new_seq
+        return new_d_id_seq
+
 
 def save_trimmed_msa(d_id_seq, path_out_msa):
     ''' save fasta from d_id_seq '''
@@ -452,6 +540,7 @@ def plot_cm_interchain(d_dist, cut_off_dist = -1):
     if cut_off_dist != -1:
         m = ((m>0) & (m< cut_off_dist)) + 0
         plt.title('cut_off_dist: {0}A'.format(cut_off_dist))
-    plt.imshow(m)
+    #for plotting
+    plt.imshow(m, cmap = 'Greys', vmin=0, vmax = 2)
     plt.colorbar()
     return 0
