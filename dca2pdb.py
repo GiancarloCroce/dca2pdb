@@ -394,6 +394,22 @@ def compute_freq(d_id_seq, pseudocount = 0):
     fi /= fi.sum(axis = 0)
     return fi
 
+def compute_global_freq(d_id_seq, pseudocount = 0):
+    ''' compute overall frequencies (not for position) (not MSA) '''
+    fi = {a:0 for a in valid_aa}
+    tot = 0
+    for name, seq in d_id_seq.items():
+        #print(name)
+        for idx_aa, amino_a in enumerate(seq):
+            #non standard aa mapped to -
+            if amino_a not in valid_aa:
+                amino_a = '-'
+            fi[amino_a] += 1
+            tot += 1
+    #normalize
+    fi_norm = {i:fi[i]/tot for i in fi.keys()}
+    return fi_norm
+
 def compute_entropy_from_freq(fi, remove_gaps = True, base2 = True):
     if remove_gaps:
         fi = (fi[:20,:])/np.sum(fi[:20,:], axis = 0)

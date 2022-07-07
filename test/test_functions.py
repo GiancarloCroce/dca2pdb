@@ -14,14 +14,15 @@ sns.set_context("talk")
 
 ####################################################################################################
 #ANALYSIS OF A PDB
-pdb = './4nqe.trunc.fit.pdb'
-#path_pdb = './2bnr.pdb'
+#pdb = './dib_plos/2bnr.trunc.fit.pdb'
+path_pdb = './2bnr.pdb'
 pdb = dca2pdb.load_pdb(path_pdb)
 
 #get chain->pdb_seq,pdb_idx
 d_chain_seq, d_chain_idx = dca2pdb.get_pdb_sequences(pdb)
 
-d_intrachain_dist  = dca2pdb.intrachain_dist(pdb, chain = "E", distance_type = "min")
+d_intrachain_dist  = dca2pdb.intrachain_dist(pdb, chain = "A", distance_type = "min")
+
 m_intrachain = dca2pdb.make_intrachain_matrix(d_intrachain_dist)
 
 plt.imshow(m_intrachain)
@@ -29,11 +30,8 @@ plt.imshow(m_intrachain)
 dca2pdb.plot_cm_interchain(d_intrachain_dist, cut_off_dist = 5)
 
 d_interchain_dist  = dca2pdb.interchain_dist(pdb, chain1 = "A", chain2 = "D",  distance_type = "min")
-
 m_interchain = dca2pdb.make_interchain_matrix(d_interchain_dist)
-
 plt.imshow(m_interchain)
-
 dca2pdb.plot_cm_interchain(d_interchain_dist, cut_off_dist = 5)
 
 
